@@ -1,0 +1,71 @@
+#ifndef HARDWARE_NODE_HPP
+#define HARDWARE_NODE_HPP
+
+#include <memory>
+#include <mutex>
+
+#include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/joint_state.hpp"
+#include "base/msg/wheel_velocities.hpp"
+#include "base/diff_drive_lib.hpp"
+#include <cmath>
+#include <memory>
+
+class HardwareNode : public rclcpp::Node
+{
+public:
+    HardwareNode();
+
+private:
+    // Callback für Wheel-Commands
+    void command_callback(const base::msg::WheelVelocities::SharedPtr msg);
+
+    // Hauptregel-Loop
+    void control_loop();
+
+    // Lowpass
+    double lowpass(double v_raw, double v_prev, double dt, double tau);
+
+    // ROS
+    rclcpp::Subscription<base::msg::WheelVelocities>::SharedPtr sub_;
+    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_;
+    rclcpp::TimerBase::SharedPtr timer_;
+
+    // Hardware
+    std::unique_ptr<SSC32Driver> motor_driver_;
+    std::unique_ptr<PhidgetEncoderWrapper> enc_left_;
+    std::unique_ptr<PhidgetEncoderWrapper> enc_right_;
+
+    // PID-Regler
+    std::unique_ptr<PIDController> pid_left_;
+    std::unique_ptr<PIDController> pid_right_;
+
+    // Zielgeschwindigkeiten
+    double target_l_{0.0};
+    double target_r_{0.0};
+
+    // gefilterte Geschwindigkeiten
+    double vel_l_filt_{0.0};
+    double vel_r_filt_{0.0};
+
+    // Letzte Positionen (für Geschwindigkeitsermittlung)
+    static constexpr double ticks_per_rev_ = 40000; 
+    static constexpr double ticks_to_rad_ = (2.0 * M_PI) / ticks_per_rev_;
+
+    double last_pos_l_{0.0};
+    double last_pos_r_{0.0};
+
+    // Zeitstempel
+    rclcpp::Time last_time_;
+    rclcpp::Time last_cmd_time_;  
+
+    // Sicherheitsparameter
+    double max_wheel_speed_{1.0}; 
+
+    bool open_loop_{false};
+
+    // Thread-Sicherheit
+    std::mutex mtx_;
+};
+
+#endif 
