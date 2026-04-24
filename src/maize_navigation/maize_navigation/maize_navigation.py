@@ -10,12 +10,20 @@ from dataclasses import dataclass
 import re
 
 @dataclass
-class PerceptionData:
-    left_dist: float
-    right_dist: float
-    center_error: float
-    row_detected: bool
-    min_dist: float
+class PerceptionData: # Platzhalter, Variablen durch später sinnvoll genutzte ersetzen
+    # --- Lidar Daten ---
+    left_dist: float = 0.0
+    right_dist: float = 0.0
+    center_error: float = 0.0
+    row_detected: bool = False
+    row_end_detected: bool = False
+    
+    # --- IMU & Odometrie ---
+    current_yaw: float = 0.0      # Aktueller Winkel in Radiant
+    dist_moved: float = 0.0       # Seit dem letzten Reset gefahrene Strecke
+    
+    # --- State-spezifisch ---
+    is_row_edge_detected: bool = False # Für COUNTING_ROWS (Seitliche Erkennung)
 
 
 @dataclass
@@ -24,7 +32,7 @@ class ControlCommand:
     angular: float
 
 
-# class Perception handles laser data preprocessing
+# Diese Klasse übersetzt Rohdaten in das PerceptionData Objekt.
 class Perception:
     def __init__(self, x_min, x_max, y_min, y_max):
         self.x_min = x_min
@@ -32,46 +40,38 @@ class Perception:
         self.y_min = y_min
         self.y_max = y_max
 
-    def process(self, cloud_msg) -> PerceptionData:
-        left = []
-        right = []
-        min_dist = float('inf')
-
-        for p in point_cloud2.read_points(cloud_msg, field_names=("x", "y", "z"), skip_nans=True):
-            x, y, z = p
-            dist = np.sqrt(x**2 + y**2)
-            min_dist = min(min_dist, dist)
-
-            if self.x_min < x < self.x_max:
-                if -self.y_max < y < -self.y_min:
-                    left.append(abs(y))
-                elif self.y_min < y < self.y_max:
-                    right.append(abs(y))
-
-        if len(left) < 3 or len(right) < 3:
-            return PerceptionData(0, 0, 0, False, min_dist)
-
-        left_dist = np.median(left)
-        right_dist = np.median(right)
-
-        center_error = (right_dist - left_dist) / 2.0
-
-        return PerceptionData(
-            left_dist=left_dist,
-            right_dist=right_dist,
-            center_error=center_error,
-            row_detected=True,
-            min_dist=min_dist
-        )
+    def process(self, cloud_msg, imu_msg, odom_msg, current_state) -> PerceptionData:
+        data = PerceptionData()
+        # To-Do: Fusioniere IMU (Orientierung) und Odometrie (Distanz) in data
+        
+        # Abhängig vom State werden unterschiedliche Merkmale extrahiert:
+        if current_state == State.DRIVE_IN_ROW:
+            # To-Do: Berechne center_error und row_end_detected (Lidar vorne/seitlich)
+            pass
+        elif current_state == State.EXIT_ROW:
+            # To-Do: Prüfe, ob Distanz zu den Reihen hinter uns groß genug ist
+            pass
+        elif current_state == State.TURN:
+            # To-Do: Überwache nur den relativen Winkel (IMU)
+            pass
+        elif current_state == State.COUNTING_ROWS:
+            # To-Do: Erkenne "Eingänge" der Reihen (Lidar seitlich)
+            pass
+        elif current_state == State.ENTER_ROW:
+            # To-Do: Erkenne, ob der Roboter wieder "gerade" in der Reihe steht
+            pass
+            
+        return data
     
 
-# State Machine
 class State(Enum):
-    DRIVE = 1
+    DRIVE_IN_ROW = 1
     EXIT_ROW = 2
     TURN = 3
-    ENTER_ROW = 4
+    COUNTING_ROWS = 4
+    ENTER_ROW = 5
 
+# extrahiert das zu fahrende Pattern aus dem string und speichert es als Liste
 class Pattern:
     def __init__(self, pattern_str):
         self.steps = self.parse(pattern_str)
@@ -97,88 +97,73 @@ class Pattern:
         self.index += 1
 
 class StateMachine:
-    def __init__(self, pattern: Pattern):
-        self.state = State.DRIVE
+    def __init__(self, pattern):
+        self.state = State.DRIVE_IN_ROW
         self.pattern = pattern
-
-        self.rows_to_skip = 0
-        self.current_direction = None
-        self.row_counter = 0
+        self.target_yaw = 0.0
+        self.rows_passed = 0
 
     def update(self, perception: PerceptionData):
-        if self.state == State.DRIVE:
-            if not perception.row_detected:
-                step = self.pattern.current()
-                if step is None:
-                    return self.state
-
-                self.rows_to_skip, self.current_direction = step
-                self.row_counter = 0
-                self.state = State.EXIT_ROW
+        # Hier jeweils Bedingungen festlegen, wann States gewechselt werden, hier nur Vorschläge wie das aussehen könnte
+        if self.state == State.DRIVE_IN_ROW:
+            # To-Do: Wechsel zu EXIT_ROW, wenn perception.row_end_detected True
+            pass
 
         elif self.state == State.EXIT_ROW:
-            # To-Do: Aus Reihe herausfahren
-            self.state = State.TURN
+            # To-Do: Fahre X Meter aus der Reihe (Odometrie), dann Wechsel zu TURN
+            pass
 
         elif self.state == State.TURN:
-            # To-Do: Wende gemäß Muster (rechts oder links)
-            self.state = State.ENTER_ROW
+            # To-Do: Wenn Winkel (perception.current_yaw) Ziel erreicht -> COUNTING_ROWS
+            # Hinweis: Target_yaw muss beim Eintritt in TURN einmalig gesetzt werden
+            pass
+
+        elif self.state == State.COUNTING_ROWS:
+            # To-Do: Zähle Reihen. Wenn rows_passed == pattern.count -> ENTER_ROW
+            pass
 
         elif self.state == State.ENTER_ROW:
-            if perception.row_detected:
-                self.row_counter += 1
+            # To-Do: Wenn Ausrichtung stimmt und Roboter tief genug in Reihe -> DRIVE_IN_ROW
+            # Hier Pattern-Index erhöhen!
+            pass
 
-                if self.row_counter >= self.rows_to_skip:
-                    self.pattern.next()
-                    self.state = State.DRIVE
-
-        return self.state
-
-# Controller
+# Berechnet die tatsächlichen cmd_vel Befehle.
 class Controller:
-    def __init__(self):
-        self.kp = 2.0
-        self.kd = 0.0
-        self.ki = 0.0
-
-        self.prev_error = 0
-        self.integral = 0
-
-    def compute(self, state: State, perception: PerceptionData, direction=None):
-        if state == State.DRIVE:
-            return self.drive(perception)
-
+    def compute(self, state, perception, direction): # jede folgende Funktion gibt übereinen Regler einen cmd_vel Befehl zurück
+        if state == State.DRIVE_IN_ROW:
+            return self.drive_in_row(perception)
+        
         elif state == State.EXIT_ROW:
-            return ControlCommand(0.3, 0.0)
-
+            return self.exit_row(perception)
+            
         elif state == State.TURN:
-            return self.turn(direction)
-
+            return self.turn(perception)
+            
+        elif state == State.COUNTING_ROWS:
+            return self.counting_rows(perception)
+            
         elif state == State.ENTER_ROW:
-            return ControlCommand(0.2, 0.0)
+            return self.enter_row(perception)
 
-        return ControlCommand(0.0, 0.0)
+    def drive_in_row(self, perception):
+        # To-Do: Implementiere Spurhalte-Logik
+        pass
 
-    def drive(self, perception):
-        error = perception.center_error
+    def exit_row(self, perception):
+        # To-Do: Fahre langsam geradeaus aus der Reihe
+        pass
 
-        self.integral += error
-        derivative = error - self.prev_error
+    def turn(self, perception):
+        # To-Do: Drehe auf der Stelle (P-Regler für den Winkel)
+        pass
 
-        angular = self.kp * error + self.kd * derivative
-        linear = 0.5
+    def counting_rows(self, perception):
+        # To-Do: Fahre parallel zum Vorgewende (Headland)
+        pass
 
-        self.prev_error = error
-
-        return ControlCommand(linear, angular)
-
-    def turn(self, direction):
-        if direction == "L":
-            return ControlCommand(0.2, 0.8)
-        elif direction == "R":
-            return ControlCommand(0.2, -0.8)
-        return ControlCommand(0.0, 0.0)
-
+    def enter_row(self, perception):
+        # To-Do: Kurvenfahrt in die Zielreihe
+        pass
 
 # ROS Node
 class FieldRobotNavigator(Node):
@@ -186,7 +171,7 @@ class FieldRobotNavigator(Node):
         super().__init__("maize_navigator")
 
         # -------------------------
-        # Parameter deklarieren
+        # Parameter deklarieren, hier anpassen je nach obiger Implementierung, welche Parameter brauchen wir?
         # -------------------------
         self.declare_parameter("pattern", "1L-1R-2L-3R")
 
